@@ -7,121 +7,109 @@ import (
 	"strconv"
 )
 
-type InTable struct {
-	xs []map[string] float64
-
-	ColNames []string
-	Rows int
+type ReadTableOptions struct {
+	Delimiter rune
+	Comment rune
 }
 
-// NewInTable creates a table that can be read in from a file.
-func NewInTable(colNames ...string) *InTable {
-	t := new(InTable)
-
-	t.ColNames = make([]string, len(colNames))
-	for i := 0; i < len(colNames); i++ {
-		t.ColNames[i] = colNames[i]
-	}
-
-	t.xs = nil
-
-	return t
+var DefaultReadTableOptions = ReadTableOptions{
+	Delimiter: ' ',
+	Comment: '#',
 }
 
-// This is suboptimal.
-func (t *InTable) Access(row int, colName string) float64 {
-	if t.xs == nil {
-		panic("Table not yet initialized.")
-	}
+func ReadTable(
+	fileName string, colIdxs []int,
+	opt *ReadTableOptions,
+) ([][]float64, error) {
 
-	return t.xs[row][colName]
-}
+	if opt == nil { opt = &DefaultReadTableOptions }
+	delim := opt.Delimiter
+	comm := opt.Comment
 
-func isComment(line string) bool {
-	return len(line) > 0 && line[0] == '#'
-}
+	bs, err := ioutil.ReadFile(fileName)
+	if err != nil { return nil, err }
+	str := string(bs)
+	
+	lines := strings.Split(str, "\n")
+	cols := make([][]float64, len(colIdxs))
+	for i := range cols { cols[i] = make([]float64, len(lines)) }
 
-func uncomment(line string) string {
-	return strings.Split(line, "#")[0]
-}
-
-func getColIndices(line string) []string {
-	colIndices := make([]string, 0)
-	for _, word := range strings.Split(line, " ") {
-		if len(word) > 0 {
-			colIndices = append(colIndices, word)
-		}
-	}
-	return colIndices
-}
-
-func findStr(strs []string, target string) bool {
-	for _, str := range strs {
-		if str == target {
-			return true
-		}
-	}
-	return false
-}
-
-// This is suboptimal.
-func checkColNames(colIndices []string, colNames []string) {
-	for _, name := range colNames {
-		if !findStr(colIndices, name) {
-			panic(fmt.Sprintf("name '%s' not found in input file.", name))
-		}
-	}
-}
-
-// Read takes the contents of the specified file and converts them
-// into an InTable.
-func (t *InTable) Read(fileName string) {
-	str, err := ioutil.ReadFile(fileName)
-	if err != nil {
-		panic(err)
-	}
-
-	lines := strings.Split(string(str), "\n")
-	if len(lines) > 0  && !isComment(lines[0]) {
-		panic("Input text file does not have table col names.")
-	}
-
-	headerEnded := false
-	var colIndices []string
-	t.xs = make([]map[string]float64, 0)
-
-	for i, line := range lines {
-		if !isComment(line) && len(line) > 0 {
-			if !headerEnded {
-				colIndices = getColIndices(lines[i - 1][1:])
-				checkColNames(colIndices, t.ColNames)
-				headerEnded = true
-			}
-			
-			uncom := uncomment(line)
-			words := make([]string, 0)
-			for _, word := range strings.Split(uncom, " ") {
-				if len(word) > 0 {
-					words = append(words, word)
-				}
-			}
-
-			if len(words) != len(colIndices) {
-				panic(fmt.Sprintf("line %d has the incorrect " +
-					"number of columns", i + 1))
-			}
-
-			m := make(map[string]float64)
-			for col, word := range words {
-				m[colIndices[col]], err = strconv.ParseFloat(word, 64)
-				if err != nil {
-					panic(err)
-				}
-			}
-
-			t.xs = append(t.xs, m)
+	colLine := 0
+	p := newParser(lines, cols, colIdxs, delim, comm)
+	for i := range lines {
+		if fullLine, err := p.parseLine(i, colLine); err != nil {
+			return nil, err
+		} else if fullLine {
+			colLine++
 		}
 	}
 
-	t.Rows = len(t.xs)
+	for i := range cols { cols[i] = cols[i][0: colLine] }	
+	return cols, nil
+}
+
+func newParser(
+	lines []string,
+	cols [][]float64, colIdxs []int,
+	delim, comm rune,
+) *parser {
+	p := &parser{
+		lines: lines, cols: cols, colIdxs: colIdxs,
+		delim: string(delim), comm: comm,
+	}
+
+	for _, col := range colIdxs {
+		if col > p.maxCol { p.maxCol = col }
+	}
+
+	return p
+}
+
+type parser struct {
+	lines []string
+	cols [][]float64
+	colIdxs []int
+	maxCol int
+	delim string
+	comm rune
+}
+
+func (p *parser) parseLine(stringLine, floatLine int) (bool, error) {
+	line := p.lines[stringLine]
+	lineEnd := 0
+	for _, r := range line {
+		if r == p.comm { break }
+		lineEnd++
+	}
+	
+	tokens := strings.Split(line[0: lineEnd], " ")
+	dst := 0
+	for src, tok := range tokens {
+		if tok != "" {
+			tokens[dst] = tokens[src]
+			dst++
+		}
+	}
+	tokens = tokens[0: dst]
+	
+	if len(tokens) == 0 { return false, nil }
+
+	if len(tokens) <= p.maxCol { 
+		return false, fmt.Errorf (
+			"Line %d of source file comtains %d columns, but was expecting %d.",
+			stringLine, len(tokens), p.maxCol + 1,
+		)
+	}
+
+	for i, j := range p.colIdxs {
+		t := tokens[j]
+		var err error
+		if p.cols[i][floatLine], err = strconv.ParseFloat(t, 64); err != nil {
+			return false, fmt.Errorf(
+				"On line %d of souce file: %s", stringLine, err.Error(),
+			)
+		}
+	}
+
+	return true, nil
 }
