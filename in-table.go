@@ -1,9 +1,9 @@
 package table
 
 import (
+	"strings"
 	"fmt"
 	"io/ioutil"
-	"strings"
 	"strconv"
 )
 
@@ -30,7 +30,10 @@ func ReadTable(
 	if err != nil { return nil, err }
 	str := string(bs)
 	
-	lines := strings.Split(str, "\n")
+	lines := make([]string, strings.Count(str, "\n"))
+	n := splitInPlace(str, '\n', lines)
+	lines = lines[:n]
+
 	cols := make([][]float64, len(colIdxs))
 	for i := range cols { cols[i] = make([]float64, len(lines)) }
 
@@ -53,56 +56,51 @@ func newParser(
 	cols [][]float64, colIdxs []int,
 	delim, comm rune,
 ) *parser {
-	p := &parser{
-		lines: lines, cols: cols, colIdxs: colIdxs,
-		delim: string(delim), comm: comm,
+	maxCol := 0
+	for _, col := range colIdxs {
+		if col > maxCol { maxCol = col }
 	}
 
-	for _, col := range colIdxs {
-		if col > p.maxCol { p.maxCol = col }
+	p := &parser{
+		lines: lines, cols: cols, colIdxs: colIdxs,
+		delim: uint8(delim), comm: uint8(comm),
+		tokens: make([]string, maxCol + 1),
 	}
 
 	return p
 }
 
 type parser struct {
-	lines []string
+	lines, tokens []string
 	cols [][]float64
 	colIdxs []int
-	maxCol int
-	delim string
-	comm rune
+	delim, comm uint8
 }
 
 func (p *parser) parseLine(stringLine, floatLine int) (bool, error) {
 	line := p.lines[stringLine]
 	lineEnd := 0
-	for _, r := range line {
-		if r == p.comm { break }
+	lline := len(line)
+	for i := 0; i < lline; i++ {
+		if line[i] == p.comm { break }
 		lineEnd++
 	}
 	
-	tokens := strings.Split(line[0: lineEnd], " ")
-	dst := 0
-	for src, tok := range tokens {
-		if tok != "" {
-			tokens[dst] = tokens[src]
-			dst++
-		}
-	}
-	tokens = tokens[0: dst]
-	
-	if len(tokens) == 0 { return false, nil }
+	p.tokens = p.tokens[:cap(p.tokens)]
+	n := splitInPlace(line[0: lineEnd], p.delim, p.tokens)
+	p.tokens = p.tokens[:n]
 
-	if len(tokens) <= p.maxCol { 
+	if len(p.tokens) == 0 { return false, nil }
+
+	if len(p.tokens) < cap(p.tokens) { 
 		return false, fmt.Errorf (
-			"Line %d of source file comtains %d columns, but was expecting %d.",
-			stringLine, len(tokens), p.maxCol + 1,
+			"Line %d of source file contains %d columns, but was expecting %d.",
+			stringLine, len(p.tokens), cap(p.tokens),
 		)
 	}
 
 	for i, j := range p.colIdxs {
-		t := tokens[j]
+		t := p.tokens[j]
 		var err error
 		if p.cols[i][floatLine], err = strconv.ParseFloat(t, 64); err != nil {
 			return false, fmt.Errorf(
@@ -112,4 +110,30 @@ func (p *parser) parseLine(stringLine, floatLine int) (bool, error) {
 	}
 
 	return true, nil
+}
+
+func splitInPlace(s string, sep uint8, out []string) int {
+	start := 0
+	na := 0
+	
+	ls := len(s)
+	lout := len(out)
+
+	// i -> index into 
+	for i := 0; i < ls; i++ {
+		if na == lout { break }
+
+		if s[i] == sep {
+			if start != i {
+				out[na] = s[start : i]
+				na++
+			}
+			start = i + 1
+		}
+	}
+	if na != lout && start < ls {
+		out[na] = s[start:]
+		na++
+	}
+	return na
 }
