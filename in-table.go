@@ -1,6 +1,8 @@
 package table
 
 import (
+	"runtime"
+
 	"strings"
 	"fmt"
 	"io/ioutil"
@@ -21,14 +23,15 @@ func ReadTable(
 	fileName string, colIdxs []int,
 	opt *ReadTableOptions,
 ) ([][]float64, error) {
-
 	if opt == nil { opt = &DefaultReadTableOptions }
 	delim := opt.Delimiter
 	comm := opt.Comment
 
 	bs, err := ioutil.ReadFile(fileName)
 	if err != nil { return nil, err }
+
 	str := string(bs)
+	runtime.GC()
 	
 	lines := make([]string, strings.Count(str, "\n"))
 	n := splitInPlace(str, '\n', lines)
