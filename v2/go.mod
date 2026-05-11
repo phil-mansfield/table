@@ -1,3 +1,3 @@
 module github.com/phil-mansfield/table
 
-go 1.21.1
+go 1.26.1
